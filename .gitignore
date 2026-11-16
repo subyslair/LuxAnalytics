@@ -1,0 +1,4 @@
+lux_engine
+*.o
+*.out
+.DS_Store
