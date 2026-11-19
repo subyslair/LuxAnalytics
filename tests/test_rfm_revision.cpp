@@ -3,6 +3,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <stdexcept>
 int main() {
     std::vector<Transaction> t = {
         {"Peter","2026-11-10","HK","Watch",45000},
@@ -44,5 +45,15 @@ int main() {
     auto equal=RFMCalculator::computeProfiles(t,1,1,1);
     for (std::size_t i=0;i<equal.size();++i)
         assert(std::abs(overflow[i].rfm_score-equal[i].rfm_score)<1e-12);
+    auto invalidYear = RFMCalculator::computeProfiles({{"BadYear","0000-01-01","HK","Watch",100}});
+    assert(invalidYear.empty());
+    bool aggregateOverflow = false;
+    try {
+        RFMCalculator::computeProfiles({
+            {"Big","2026-11-24","HK","Watch",large},
+            {"Big","2026-11-24","HK","Watch",large}
+        });
+    } catch (const std::overflow_error&) { aggregateOverflow = true; }
+    assert(aggregateOverflow);
     std::cout << "All revised RFM policy tests passed.\n";
 }
