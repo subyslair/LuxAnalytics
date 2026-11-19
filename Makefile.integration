@@ -1,0 +1,21 @@
+CXX = g++
+CXXFLAGS = -std=c++17 -Wall -Wextra -pedantic -O2 -Iinclude
+HEADERS = $(wildcard include/*.h)
+MODULES = src/RFMCalculator.cpp src/KMeansCluster.cpp src/TierMapper.cpp
+.PHONY: all check clean
+all: rfm_revision_tests kmeans_tests tiermapper_tests integration_tests
+rfm_revision_tests: src/RFMCalculator.cpp tests/test_rfm_revision.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) src/RFMCalculator.cpp tests/test_rfm_revision.cpp -o $@
+kmeans_tests: src/KMeansCluster.cpp tests/test_kmeans.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) src/KMeansCluster.cpp tests/test_kmeans.cpp -o $@
+tiermapper_tests: src/TierMapper.cpp tests/test_tiermapper.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) src/TierMapper.cpp tests/test_tiermapper.cpp -o $@
+integration_tests: $(MODULES) tests/test_integration.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) $(MODULES) tests/test_integration.cpp -o $@
+check: all
+	./rfm_revision_tests
+	./kmeans_tests
+	./tiermapper_tests
+	./integration_tests data/luxury_5k.csv
+clean:
+	rm -f rfm_revision_tests kmeans_tests tiermapper_tests integration_tests
