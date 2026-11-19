@@ -1,3 +1,4 @@
+#include "CSVParser.h"
 #include "KMeansCluster.h"
 #include "Models.h"
 #include "RFMCalculator.h"
@@ -16,54 +17,12 @@
 #include <string>
 #include <vector>
 
-// Helper Functions
-std::ifstream openDataset() {
-    std::ifstream file("data/luxury_5k.csv");
-    if (!file.is_open()) {
-        file.open("../data/luxury_5k.csv");
+std::string resolveDatasetPath() {
+    std::ifstream probe("data/luxury_5k.csv");
+    if (probe.is_open()) {
+        return "data/luxury_5k.csv";
     }
-    return file;
-}
-
-std::vector<std::string> splitCSVLine(const std::string& line) {
-    std::vector<std::string> tokens;
-    std::stringstream ss(line);
-    std::string item;
-    while (std::getline(ss, item, ',')) {
-        if (!item.empty() && item.back() == '\r') {
-            item.pop_back();
-        }
-        tokens.push_back(item);
-    }
-    return tokens;
-}
-
-std::vector<Transaction> loadDatasetTransactions() {
-    std::ifstream file = openDataset();
-    assert(file.is_open() && "Error: Cannot open data/luxury_5k.csv");
-
-    std::string line;
-    assert(std::getline(file, line) && "Error: CSV file is empty");
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    assert(line == "CustomerID,Date,Boutique,Category,Amount" && "Error: Header mismatch");
-
-    std::vector<Transaction> transactions;
-    transactions.reserve(5000);
-
-    while (std::getline(file, line)) {
-        if (line.empty()) continue;
-        std::vector<std::string> cols = splitCSVLine(line);
-        assert(cols.size() == 5 && "Error: Row does not have 5 columns");
-
-        Transaction tx;
-        tx.customer_id = cols[0];
-        tx.date = cols[1];
-        tx.boutique = cols[2];
-        tx.category = cols[3];
-        tx.amount = std::stod(cols[4]);
-        transactions.push_back(std::move(tx));
-    }
-    return transactions;
+    return "../data/luxury_5k.csv";
 }
 
 CustomerProfile makeProfile(const std::string& id, int days, int frequency,
@@ -78,9 +37,57 @@ CustomerProfile makeProfile(const std::string& id, int days, int frequency,
     return p;
 }
 
-// Test 1: Synthetic Dataset Integrity
+// Test 1: CSVParser Module
+void testCSVParser() {
+    std::cout << "[TEST 1] Verifying CSVParser...\n";
+
+    // 1. Date calculation & calendar edge cases
+    assert(CSVParser::calculateDaysElapsed("2026-11-24") == 0);
+    assert(CSVParser::calculateDaysElapsed("2026-11-10") == 14);
+    assert(CSVParser::calculateDaysElapsed("2026-01-14") == 314);
+    assert(CSVParser::calculateDaysElapsed("2024-02-29", "2024-03-01") == 1);  // Leap year
+    assert(CSVParser::calculateDaysElapsed("2026-02-29") == -1);                // Non-leap invalid
+    assert(CSVParser::calculateDaysElapsed("2026-11-25") == -1);                // Future date
+    assert(CSVParser::calculateDaysElapsed("2026/11/10") == -1);                // Bad format
+
+    // 2. Malformed CSV handling (capture stderr to keep test output clean)
+    const std::string tempCSV = "temp_parser_dirty_test.csv";
+    {
+        std::ofstream out(tempCSV);
+        out << "CustomerID,Date,Boutique,Category,Amount\r\n"
+            << "  Alice , 2026-11-20 , Landmark_HK , Watch , 12500.50 \r\n"
+            << "\n"
+            << "BadCols,2026-11-20,HK\n"
+            << ",2026-11-20,HK,Bag,5000\n"
+            << "BadDate,2026-02-30,HK,Bag,5000\n"
+            << "NegAmount,2026-11-20,HK,Bag,-200\n"
+            << "TrailingText,2026-11-20,HK,Bag,500abc\n"
+            << "Bob,2026-11-24,Canton_Rd,RTW,3200\n";
+    }
+
+    std::ostringstream errCapture;
+    auto* prevErr = std::cerr.rdbuf(errCapture.rdbuf());
+
+    assert(CSVParser::loadTransactions("non_existent_file_xyz.csv").empty());
+    std::vector<Transaction> parsed = CSVParser::loadTransactions(tempCSV);
+
+    std::cerr.rdbuf(prevErr);
+    std::remove(tempCSV.c_str());
+
+    assert(parsed.size() == 2);
+    assert(parsed[0].customer_id == "Alice" && parsed[0].date == "2026-11-20" &&
+           parsed[0].boutique == "Landmark_HK" && parsed[0].category == "Watch" &&
+           std::abs(parsed[0].amount - 12500.50) < 1e-9);
+    assert(parsed[1].customer_id == "Bob" && parsed[1].date == "2026-11-24" &&
+           std::abs(parsed[1].amount - 3200.0) < 1e-9);
+    assert(errCapture.str().find("[Warning]") != std::string::npos);
+
+    std::cout << "[PASS] CSVParser tests passed!\n\n";
+}
+
+// Test 2: Synthetic Dataset Integrity via CSVParser
 void testDatasetIntegrity(const std::vector<Transaction>& transactions) {
-    std::cout << "[TEST 1] Verifying data/luxury_5k.csv integrity...\n";
+    std::cout << "[TEST 2] Verifying data/luxury_5k.csv integrity...\n";
     assert(transactions.size() == 5000 && "Error: Expected exactly 5,000 rows");
 
     std::set<std::string> customers;
@@ -88,7 +95,7 @@ void testDatasetIntegrity(const std::vector<Transaction>& transactions) {
         assert(!tx.customer_id.empty());
         assert(!tx.boutique.empty());
         assert(!tx.category.empty());
-        assert(tx.date.size() == 10 && tx.date[4] == '-' && tx.date[7] == '-');
+        assert(CSVParser::calculateDaysElapsed(tx.date) >= 0);
         assert(tx.amount >= 300.0);
         customers.insert(tx.customer_id);
     }
@@ -97,14 +104,14 @@ void testDatasetIntegrity(const std::vector<Transaction>& transactions) {
     assert(customers.count("Jenny") == 1 && "Error: Demo persona Jenny missing");
     assert(customers.count("Marcus") == 1 && "Error: Demo persona Marcus missing");
 
-    std::cout << "  -> Verified " << transactions.size() << " transactions across "
+    std::cout << "  -> Loaded & verified " << transactions.size() << " transactions across "
               << customers.size() << " unique customers.\n";
     std::cout << "[PASS] Dataset integrity verified!\n\n";
 }
 
-// Test 2: RFMCalculator Module
+// Test 3: RFMCalculator Module
 void testRFMCalculator() {
-    std::cout << "[TEST 2] Verifying RFMCalculator...\n";
+    std::cout << "[TEST 3] Verifying RFMCalculator...\n";
     std::vector<Transaction> sample = {
         {"Peter", "2026-11-10", "HK", "Watch", 45000},
         {"Peter", "2026-09-02", "HK", "Jewelry", 22000},
@@ -127,7 +134,7 @@ void testRFMCalculator() {
         assert(p.cluster_id == -1);
     }
 
-    // Dirty rows filtering (negative, zero, year 0000, invalid calendar date, future date, NaN, empty ID)
+    // Dirty rows filtering
     auto dirty = sample;
     dirty.push_back({"", "2026-11-24", "HK", "Watch", 5000});
     dirty.push_back({"Peter", "2026-11-24", "HK", "Refund", -45000});
@@ -178,16 +185,14 @@ void testRFMCalculator() {
     std::cout << "[PASS] RFMCalculator tests passed!\n\n";
 }
 
-// Test 3: KMeansCluster Module
+// Test 4: KMeansCluster Module
 void testKMeansCluster() {
-    std::cout << "[TEST 3] Verifying KMeansCluster...\n";
+    std::cout << "[TEST 4] Verifying KMeansCluster...\n";
 
-    // Empty input safety
     std::vector<CustomerProfile> empty;
     KMeansCluster::assignClusters(empty, 3, 100);
     assert(empty.empty());
 
-    // k > n and non-positive k/max_iters clamping
     std::vector<CustomerProfile> single = {makeProfile("Solo", 10, 1, 5000, 0.5, -1)};
     KMeansCluster::assignClusters(single, 5, 50);
     assert(single[0].cluster_id == 0);
@@ -201,7 +206,6 @@ void testKMeansCluster() {
         assert(p.cluster_id == 0);
     }
 
-    // Zero-variance / identical profiles (tests empty-cluster recovery & span == 0)
     std::vector<CustomerProfile> identical = {
         makeProfile("Id1", 30, 2, 10000, 0.5, -1),
         makeProfile("Id2", 30, 2, 10000, 0.5, -1),
@@ -213,7 +217,6 @@ void testKMeansCluster() {
         assert(p.cluster_id >= 0 && p.cluster_id < 3);
     }
 
-    // Determinism check (fixed seed = 42) across multi-archetype profiles
     std::vector<CustomerProfile> run1 = {
         makeProfile("P1", 10, 5, 80000, 0.95, -1),
         makeProfile("P2", 15, 4, 65000, 0.88, -1),
@@ -233,9 +236,9 @@ void testKMeansCluster() {
     std::cout << "[PASS] KMeansCluster tests passed!\n\n";
 }
 
-// Test 4: TierMapper & CSV Export Module
+// Test 5: TierMapper & CSV Export Module
 void testTierMapper() {
-    std::cout << "[TEST 4] Verifying TierMapper...\n";
+    std::cout << "[TEST 5] Verifying TierMapper...\n";
     std::vector<CustomerProfile> profiles = {
         makeProfile("Peter", 14, 2, 67000, 0.95, 8),
         makeProfile("Jenny", 314, 2, 30500, 0.45, 3),
@@ -254,7 +257,6 @@ void testTierMapper() {
         assert(!p.recommended_action.empty());
     }
 
-    // Cluster label invariance
     auto relabeled = profiles;
     for (auto& p : relabeled) {
         p.cluster_id = (p.cluster_id == 8) ? 71 : 92;
@@ -264,7 +266,6 @@ void testTierMapper() {
         assert(profiles[i].luxury_tier == relabeled[i].luxury_tier);
     }
 
-    // Threshold boundaries & priority precedence (At-Risk beats Ultra-VIC)
     std::vector<CustomerProfile> boundary = {
         makeProfile("RiskBoundary", 180, 2, 20000, 0.5, -1),
         makeProfile("LapsedUltra", 180, 2, 90000, 0.9, -1),
@@ -277,7 +278,6 @@ void testTierMapper() {
     assert(boundary[2].luxury_tier == "Ultra-VIC");
     assert(boundary[3].luxury_tier == "Entry Client");
 
-    // CSV quoting & escaping
     const std::string path = "tiermapper_test_report.csv";
     auto escaped = profiles;
     escaped[0].customer_id = "Client, \"A\"";
@@ -292,7 +292,6 @@ void testTierMapper() {
     input.close();
     std::remove(path.c_str());
 
-    // Invalid output path throws runtime_error
     bool threw = false;
     try {
         TierMapper::exportToCSV(profiles, "");
@@ -301,7 +300,6 @@ void testTierMapper() {
     }
     assert(threw);
 
-    // Summary table formatting check
     std::vector<CustomerProfile> empty;
     std::ostringstream capture;
     auto* prevBuf = std::cout.rdbuf(capture.rdbuf());
@@ -314,9 +312,9 @@ void testTierMapper() {
     std::cout << "[PASS] TierMapper tests passed!\n\n";
 }
 
-// Test 5: End-to-End Pipeline Integration on 5k Dataset
-void testPipelineOn5kDataset(const std::vector<Transaction>& transactions) {
-    std::cout << "[TEST 5] Running RFM + KMeans + TierMapper pipeline on luxury_5k.csv...\n";
+// Test 6: Full 4-Stage End-to-End Pipeline on 5k Dataset
+void testFullPipelineOn5kDataset(const std::vector<Transaction>& transactions) {
+    std::cout << "[TEST 6] Running full CSVParser -> RFM -> KMeans -> TierMapper pipeline...\n";
     auto profiles = RFMCalculator::computeProfiles(transactions);
     assert(!profiles.empty());
 
@@ -348,22 +346,20 @@ void testPipelineOn5kDataset(const std::vector<Transaction>& transactions) {
     for (const auto& kv : tierCounts) {
         std::cout << " [" << kv.first << ": " << kv.second << "]";
     }
-    std::cout << "\n[PASS] End-to-end 5k pipeline integration passed!\n\n";
+    std::cout << "\n[PASS] Full 4-stage pipeline integration passed!\n\n";
 }
 
 int main() {
-    std::cout << "=== LuxAnalytics Integrated Unit & Pipeline Test Runner ===\n\n";
+    std::cout << "LuxAnalytics Full-Stack QA & Integration Test Runner \n\n";
 
-    std::vector<Transaction> dataset = loadDatasetTransactions();
+    testCSVParser();
+    std::vector<Transaction> dataset = CSVParser::loadTransactions(resolveDatasetPath());
     testDatasetIntegrity(dataset);
     testRFMCalculator();
     testKMeansCluster();
     testTierMapper();
-    testPipelineOn5kDataset(dataset);
+    testFullPipelineOn5kDataset(dataset);
 
-    // Pending teammate module:
-    // testCSVParser();  // Member 2: CSVParser.h
-
-    std::cout << "All active unit & integration tests passed!\n";
+    std::cout << "All 6 test suites passed! All team modules verified.\n";
     return 0;
 }
