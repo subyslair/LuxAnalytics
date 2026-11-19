@@ -1,3 +1,4 @@
+#include "KMeansCluster.h"
 #include "Models.h"
 #include "RFMCalculator.h"
 #include "TierMapper.h"
@@ -8,6 +9,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -113,7 +115,6 @@ void testRFMCalculator() {
 
     auto profiles = RFMCalculator::computeProfiles(sample);
     assert(profiles.size() == 3);
-    // Alphabetical ordering check: Jenny -> Marcus -> Peter
     assert(profiles[0].customer_id == "Jenny" && profiles[0].recency_days == 314 &&
            profiles[0].frequency == 2 && profiles[0].monetary == 30500);
     assert(profiles[1].customer_id == "Marcus" && profiles[1].recency_days == 12 &&
@@ -126,12 +127,13 @@ void testRFMCalculator() {
         assert(p.cluster_id == -1);
     }
 
-    // Dirty rows filtering (negative refunds, zero, invalid calendar date, future date, NaN, empty ID)
+    // Dirty rows filtering (negative, zero, year 0000, invalid calendar date, future date, NaN, empty ID)
     auto dirty = sample;
     dirty.push_back({"", "2026-11-24", "HK", "Watch", 5000});
     dirty.push_back({"Peter", "2026-11-24", "HK", "Refund", -45000});
     dirty.push_back({"Peter", "2026-11-24", "HK", "Free", 0});
     dirty.push_back({"RefundOnly", "2026-11-24", "HK", "Refund", -100});
+    dirty.push_back({"ZeroYear", "0000-01-01", "HK", "Watch", 1000});
     dirty.push_back({"InvalidDate", "2026-02-30", "HK", "Watch", 1000});
     dirty.push_back({"FutureDate", "2026-11-25", "HK", "Watch", 1000});
     dirty.push_back({"NaNAmount", "2026-11-24", "HK", "Watch", std::numeric_limits<double>::quiet_NaN()});
@@ -145,6 +147,18 @@ void testRFMCalculator() {
         assert(cleaned[i].monetary == profiles[i].monetary);
         assert(std::abs(cleaned[i].rfm_score - profiles[i].rfm_score) < 1e-12);
     }
+
+    // Monetary aggregation overflow throws std::overflow_error
+    bool overflowThrew = false;
+    try {
+        RFMCalculator::computeProfiles({
+            {"Whale", "2026-11-20", "HK", "Watch", std::numeric_limits<double>::max()},
+            {"Whale", "2026-11-21", "HK", "Watch", std::numeric_limits<double>::max()}
+        });
+    } catch (const std::overflow_error&) {
+        overflowThrew = true;
+    }
+    assert(overflowThrew);
 
     // Single-shopper neutral score & empty input
     auto single = RFMCalculator::computeProfiles({{"Today", "2026-11-24", "HK", "Watch", 100}});
@@ -164,9 +178,64 @@ void testRFMCalculator() {
     std::cout << "[PASS] RFMCalculator tests passed!\n\n";
 }
 
-// Test 3: TierMapper & CSV Export Module
+// Test 3: KMeansCluster Module
+void testKMeansCluster() {
+    std::cout << "[TEST 3] Verifying KMeansCluster...\n";
+
+    // Empty input safety
+    std::vector<CustomerProfile> empty;
+    KMeansCluster::assignClusters(empty, 3, 100);
+    assert(empty.empty());
+
+    // k > n and non-positive k/max_iters clamping
+    std::vector<CustomerProfile> single = {makeProfile("Solo", 10, 1, 5000, 0.5, -1)};
+    KMeansCluster::assignClusters(single, 5, 50);
+    assert(single[0].cluster_id == 0);
+
+    std::vector<CustomerProfile> clamped = {
+        makeProfile("A", 5, 5, 50000, 0.9, -1),
+        makeProfile("B", 300, 1, 500, 0.1, -1)
+    };
+    KMeansCluster::assignClusters(clamped, 0, 0);
+    for (const auto& p : clamped) {
+        assert(p.cluster_id == 0);
+    }
+
+    // Zero-variance / identical profiles (tests empty-cluster recovery & span == 0)
+    std::vector<CustomerProfile> identical = {
+        makeProfile("Id1", 30, 2, 10000, 0.5, -1),
+        makeProfile("Id2", 30, 2, 10000, 0.5, -1),
+        makeProfile("Id3", 30, 2, 10000, 0.5, -1),
+        makeProfile("Id4", 30, 2, 10000, 0.5, -1)
+    };
+    KMeansCluster::assignClusters(identical, 3, 100);
+    for (const auto& p : identical) {
+        assert(p.cluster_id >= 0 && p.cluster_id < 3);
+    }
+
+    // Determinism check (fixed seed = 42) across multi-archetype profiles
+    std::vector<CustomerProfile> run1 = {
+        makeProfile("P1", 10, 5, 80000, 0.95, -1),
+        makeProfile("P2", 15, 4, 65000, 0.88, -1),
+        makeProfile("P3", 250, 2, 32000, 0.45, -1),
+        makeProfile("P4", 280, 2, 28000, 0.40, -1),
+        makeProfile("P5", 20, 1, 600, 0.22, -1),
+        makeProfile("P6", 35, 1, 900, 0.18, -1)
+    };
+    auto run2 = run1;
+    KMeansCluster::assignClusters(run1, 3, 100);
+    KMeansCluster::assignClusters(run2, 3, 100);
+    for (std::size_t i = 0; i < run1.size(); ++i) {
+        assert(run1[i].cluster_id >= 0 && run1[i].cluster_id < 3);
+        assert(run1[i].cluster_id == run2[i].cluster_id);
+    }
+
+    std::cout << "[PASS] KMeansCluster tests passed!\n\n";
+}
+
+// Test 4: TierMapper & CSV Export Module
 void testTierMapper() {
-    std::cout << "[TEST 3] Verifying TierMapper...\n";
+    std::cout << "[TEST 4] Verifying TierMapper...\n";
     std::vector<CustomerProfile> profiles = {
         makeProfile("Peter", 14, 2, 67000, 0.95, 8),
         makeProfile("Jenny", 314, 2, 30500, 0.45, 3),
@@ -232,7 +301,7 @@ void testTierMapper() {
     }
     assert(threw);
 
-    // Summary table formatting check (capture stdout cleanly)
+    // Summary table formatting check
     std::vector<CustomerProfile> empty;
     std::ostringstream capture;
     auto* prevBuf = std::cout.rdbuf(capture.rdbuf());
@@ -245,19 +314,23 @@ void testTierMapper() {
     std::cout << "[PASS] TierMapper tests passed!\n\n";
 }
 
-// Test 4: End-to-End Pipeline Integration on 5k Dataset
+// Test 5: End-to-End Pipeline Integration on 5k Dataset
 void testPipelineOn5kDataset(const std::vector<Transaction>& transactions) {
-    std::cout << "[TEST 4] Running RFM + TierMapper pipeline on luxury_5k.csv...\n";
+    std::cout << "[TEST 5] Running RFM + KMeans + TierMapper pipeline on luxury_5k.csv...\n";
     auto profiles = RFMCalculator::computeProfiles(transactions);
     assert(!profiles.empty());
 
-    // Note: KMeansCluster (Member 4) will plug in here once implemented.
+    KMeansCluster::assignClusters(profiles, 3, 100);
     TierMapper::assignTiersAndActions(profiles);
 
     bool foundPeter = false, foundJenny = false, foundMarcus = false;
+    std::map<std::string, int> tierCounts;
     for (const auto& p : profiles) {
+        assert(p.cluster_id >= 0 && p.cluster_id < 3);
         assert(!p.luxury_tier.empty());
         assert(!p.recommended_action.empty());
+        tierCounts[p.luxury_tier]++;
+
         if (p.customer_id == "Peter") {
             assert(p.luxury_tier == "Ultra-VIC");
             foundPeter = true;
@@ -271,9 +344,11 @@ void testPipelineOn5kDataset(const std::vector<Transaction>& transactions) {
     }
     assert(foundPeter && foundJenny && foundMarcus);
 
-    std::cout << "  -> Classified " << profiles.size()
-              << " customer profiles; demo personas verified.\n";
-    std::cout << "[PASS] End-to-end 5k pipeline integration passed!\n\n";
+    std::cout << "  -> Classified " << profiles.size() << " profiles:";
+    for (const auto& kv : tierCounts) {
+        std::cout << " [" << kv.first << ": " << kv.second << "]";
+    }
+    std::cout << "\n[PASS] End-to-end 5k pipeline integration passed!\n\n";
 }
 
 int main() {
@@ -282,12 +357,12 @@ int main() {
     std::vector<Transaction> dataset = loadDatasetTransactions();
     testDatasetIntegrity(dataset);
     testRFMCalculator();
+    testKMeansCluster();
     testTierMapper();
     testPipelineOn5kDataset(dataset);
 
-    // Pending teammate modules:
-    // testCSVParser();      // CSVParser.h
-    // testKMeansCluster();  // KMeansCluster.h
+    // Pending teammate module:
+    // testCSVParser();  // Member 2: CSVParser.h
 
     std::cout << "All active unit & integration tests passed!\n";
     return 0;
