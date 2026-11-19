@@ -1,0 +1,64 @@
+REVIEWED UPDATE PACKAGE -- 19 November 2026
+
+Use this package instead of mixing files from earlier generated packages.
+
+REPLACE these existing files:
+ src/RFMCalculator.cpp
+ src/KMeansCluster.cpp
+ src/TierMapper.cpp
+ tests/test_rfm_revision.cpp
+ tests/test_tiermapper.cpp
+ RFM_revision_notes.txt
+ Member5_README.txt
+
+ADD or REPLACE if previously installed:
+ tests/test_kmeans.cpp
+ tests/test_integration.cpp
+ Makefile.integration
+ Integration_notes.txt
+
+Keep original include/*.h, main.cpp and the team's Makefile unchanged.
+Source files retain original attribution. Review changes with Members 3/4 and lead.
+Do not keep original and revised RFM .cpp files together in src/.
+No changes have been pushed to GitHub.
+
+What changed:
+RFM: original header compatibility; fixed 2026-11-24 snapshot; purchase-only policy;
+Log normalization; finite weight sum validation; aggregation overflow exception;
+year 0000 rejection. See RFM_revision_notes.txt.
+KMeans: original Member 4 algorithm retained with input validation (nonnegative R/F/M,
+finite monetary, int-sized customer count) and final reassignment against final centroids.
+The final pass may change labels when iteration limit is hit; it is not a guarantee
+of convergence. Same points may occupy fewer groups than requested. IDs are not ranks.
+TierMapper: provisional policy unchanged; incremental cluster means; predictable
+numeric locale; assigned-profile score validation. Unit fixtures changed to 0..1.
+Documentation: outdated overflow/year-zero/no-integration claims corrected.
+
+Build and run from repository root:
+ make -f Makefile.integration check
+
+Requires a C++17 compiler and make. Do not use -DNDEBUG for assert-based tests.
+Each test has its own main; never compile all test .cpp files with src/main.cpp.
+Run creates/overwrites sample_pipeline_report.csv, empty_pipeline_report.csv,
+dataset_pipeline_report.csv. Unit tests also briefly create/delete their test CSV.
+make -f Makefile.integration clean removes only the four test executables.
+
+Validation performed: four warning-enabled builds, RFM policy tests, KMeans edge
+cases, TierMapper tests and 5000-receipt fixture pipeline. Reports checked for row
+count; an independent Python CSV reader parsed the resulting 1085 customer records.
+
+IMPORTANT SCOPE:
+Integration uses a restricted TEST FIXTURE reader, not Member 2's CSVParser.
+Reader accepts supplied unquoted five-column single-line CSV and rejects quotes.
+The official CLI/main.cpp and production ingestion remain untested/unmodified.
+The included integration reader must not replace CSVParser.
+
+LIMITATIONS:
+Business tier thresholds remain provisional (180 days; 20000/50000 currency units).
+Original R/F/M, not weighted scores, drive KMeans. Fixed seed is tested for same
+ordered input in this environment, not guaranteed across STL implementations.
+Empty clusters can remain. Tier output does not establish business correctness.
+Exports are not atomic or spreadsheet-formula-injection hardened. Raw currency
+uses doubles. Remaining module limits are in the two handoff documents.
+
+Full test output: validation_log.txt
