@@ -1,8 +1,15 @@
+#include <chrono>
+#include <exception>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
+
 #include "../include/Models.h"
+#include "../include/CSVParser.h"
+#include "../include/RFMCalculator.h"
+#include "../include/KMeansCluster.h"
+#include "../include/TierMapper.h"
 
 struct CLIConfig {
     std::string input_path = "data/luxury_5k.csv";
@@ -46,15 +53,48 @@ CLIConfig parseArgs(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
-    CLIConfig cfg = parseArgs(argc, argv);
+    try {
+        CLIConfig cfg = parseArgs(argc, argv);
 
-    std::cout << "=== LuxAnalytics: Luxury Clienteling & RFM Engine ===\n"
-              << "Input Dataset : " << cfg.input_path << "\n"
-              << "RFM Weights   : R=" << cfg.w_r << ", F=" << cfg.w_f << ", M=" << cfg.w_m << "\n"
-              << "K-Means (k)   : " << cfg.clusters << " clusters\n"
-              << "Output Report : " << cfg.output_path << "\n"
-              << "-----------------------------------------------------\n"
-              << "[Status] CLI ready. Waiting for module implementations to link.\n";
+        std::cout << "=== LuxAnalytics: Luxury Clienteling & RFM Engine ===\n"
+                  << "Input Dataset : " << cfg.input_path << "\n"
+                  << "RFM Weights   : R=" << cfg.w_r << ", F=" << cfg.w_f << ", M=" << cfg.w_m << "\n"
+                  << "K-Means (k)   : " << cfg.clusters << " clusters\n"
+                  << "Output Report : " << cfg.output_path << "\n"
+                  << "-----------------------------------------------------\n";
+
+        auto start_time = std::chrono::high_resolution_clock::now();
+
+        // Stage 1: Parse boutique receipts (Member 2)
+        std::vector<Transaction> transactions = CSVParser::loadTransactions(cfg.input_path);
+        std::cout << "[1/4] Loaded " << transactions.size() << " transactions.\n";
+
+        // Stage 2: Compute weighted RFM profiles (Member 3)
+        std::vector<CustomerProfile> profiles = RFMCalculator::computeProfiles(
+            transactions, cfg.w_r, cfg.w_f, cfg.w_m
+        );
+        std::cout << "[2/4] Computed RFM profiles for " << profiles.size() << " unique clients.\n";
+
+        // Stage 3: 3D K-Means clustering (Member 4 - Innovation Core)
+        KMeansCluster::assignClusters(profiles, cfg.clusters);
+        std::cout << "[3/4] Assigned clients into " << cfg.clusters << " behavioral clusters.\n";
+
+        // Stage 4: Assign luxury tiers, print summary, and export CSV (Member 5)
+        TierMapper::assignTiersAndActions(profiles);
+        TierMapper::exportToCSV(profiles, cfg.output_path);
+
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+        std::cout << "[4/4] Exported clienteling report to " << cfg.output_path
+                  << " (Completed in " << duration_ms << " ms)\n\n";
+
+        TierMapper::printSummaryTable(profiles);
+
+    } catch (const std::exception& e) {
+        std::cerr << "[Error] " << e.what() << std::endl;
+        return 1;
+    }
 
     return 0;
 }
