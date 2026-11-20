@@ -5,6 +5,7 @@
 #include <limits>
 #include <random>
 #include <vector>
+#include <stdexcept>
 
 namespace {
 
@@ -34,6 +35,13 @@ double normalizeMinMax(double value, double min_val, double max_val) {
 void KMeansCluster::assignClusters(std::vector<CustomerProfile>& profiles, int k, int max_iters) {
     if (profiles.empty()) {
         return;
+    }
+
+    for (const auto& profile : profiles) {
+        if (profile.recency_days < 0 || profile.frequency < 0 ||
+            !std::isfinite(profile.monetary) || profile.monetary < 0.0) {
+            throw std::invalid_argument("CustomerProfile contains invalid R/F/M values");
+        }
     }
 
     const int n = static_cast<int>(profiles.size());
